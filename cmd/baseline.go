@@ -7,7 +7,7 @@ import (
 var baselinePath string
 
 func BaselineHandler(args []string) {
-    path := "/etc"
+    path := "/etc" // default path
     if len(args) > 0 {
         path = args[0]
     }
