@@ -27,16 +27,19 @@ func BaselineHandler(args []string) {
 
     baselinePath = path
 
-    fileSystem := os.DirFS(path)
+
+    fileSystem := os.DirFS(path)    
+
+    _, err := os.Stat(path)
+    if err != nil {
+        fmt.Println("Cannot find path. It may be incorrect.")
+        return
+    } else {
+        fmt.Println("Creating baseline for", path)
+        fs.WalkDir(fileSystem, ".", performBaseline)
+    }
 
     
-
-    fmt.Println("Creating baseline for", path)
-    fs.WalkDir(fileSystem, ".", performBaseline)
-
-    
-
-
     // monitor.Baseline(path, db)
 }
 
@@ -76,7 +79,7 @@ func performBaseline(path string, d fs.DirEntry, err error) error {
     _, err = db.DB.Exec(
         `INSERT INTO files (file_path, file_hash, file_size, modified)
         VALUES (?, ?, ?, ?)`,
-        path, hashString, size, modTime,
+        absPath, hashString, size, modTime,
     )
     if err != nil {
         fmt.Println("DB Insert error for", path, ":", err)

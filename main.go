@@ -7,6 +7,7 @@ import (
 
 func main() {
 	db.InitializeDB()
+	defer db.DB.Close()
 
 	repl.StartREPL()
 	
