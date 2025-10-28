@@ -10,6 +10,7 @@ import (
     "path/filepath"
     "database/sql"
     "time"
+    "strings"
 
     "example.com/ekou123/db"
 
@@ -84,6 +85,45 @@ func performScan(scanID int64, path string, d fs.DirEntry, err error, counters *
     }
 
     absPath := filepath.Join(baselinePath, path)
+
+    if strings.HasPrefix(filepath.Base(absPath), ".") {
+        return nil
+    }
+
+    skipDirs := []string {
+        `C:\Windows\Temp`,
+        `C:\Windows\Logs`,
+        `C:\Windows\SoftwareDistribution`,
+        `C:\ProgramData\Microsoft\Windows\Caches`,
+        `C:\Users\%USERNAME%\AppData\Local\Temp`,
+    }
+
+    for _, skip := range skipDirs {
+        if strings.HasPrefix(strings.ToLower(absPath), strings.ToLower(skip)) {
+            return nil
+        }
+    }
+
+    watchExtensions := []string{
+        ".exe", ".dll", ".sys", ".bat", ".ps1", ".vbs",
+        ".ini", ".cfg", ".xml", ".reg", ".txt",
+    }
+
+    ext := strings.ToLower(filepath.Ext(absPath))
+    shouldWatch := false
+
+    for _, e := range watchExtensions {
+        if e == ext {
+            shouldWatch = true
+            break
+        }
+    }
+
+    if !shouldWatch {
+        return nil
+    }
+
+
     info, err := d.Info()
     if err != nil {
         return err
