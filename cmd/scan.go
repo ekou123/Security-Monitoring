@@ -19,114 +19,148 @@ import (
 var scanPath string
 // var baselinePath string
 
+type ScanCounters struct {
+    Total     int
+    New       int
+    Modified  int
+    Deleted   int
+}
+
 func ScanHandler(args []string) {
     path := "C:\\Users\\Ethan\\Desktop" // default path
     if len(args) > 0 {
         path = args[0]
     }
 
+    _, err := os.Stat(path)
+    if err != nil {
+        fmt.Println("Cannot find path. It may be incorrect.")
+        return
+    }
+
+    currentTime := time.Now().Format(time.RFC3339)
+    res, err := db.DB.Exec(`INSERT INTO scans (time, scanned_path, total_files, new_files, modified_files, deleted_files)
+                            VALUES (?, ?, 0, 0, 0, 0)`, currentTime, path)
+    if err != nil {
+        fmt.Println("Failed to start scan session:", err)
+        return
+    }
+
+    scanID, _ := res.LastInsertId()
+
+    fmt.Printf("Starting scan on #%d on %s...\n", scanID, path)
+
     fileSystem := os.DirFS(path)
 
     baselinePath = path
     
-    _, err := os.Stat(path)
+    counters := &ScanCounters{}
+    fs.WalkDir(fileSystem, ".", func(p string, d fs.DirEntry, e error) error {
+        return performScan(scanID, p, d, e, counters)
+    })
+
+    // Step 3: Detect deleted files after the walk
+    detectDeletedFiles(scanID, counters)
+
+    // Step 4: Update scan summary
+    _, err = db.DB.Exec(`UPDATE scans SET total_files=?, new_files=?, modified_files=?, deleted_files=? WHERE id=?`,
+        counters.Total, counters.New, counters.Modified, counters.Deleted, scanID)
     if err != nil {
-        fmt.Println("Cannot find path, It may be incorrect")
-        return
-    } else {
-        displayMessage := fmt.Sprintf("Scanning %s now...", path)
-        fmt.Println(displayMessage)
-        fs.WalkDir(fileSystem, ".", performScan)
+        fmt.Println("Failed to update scan summary:", err)
     }
-    // monitor.Baseline(path, db)
+
+    fmt.Printf("Scan #%d complete. Total: %d | New: %d | Modified: %d | Deleted: %d\n",
+        scanID, counters.Total, counters.New, counters.Modified, counters.Deleted)
 }
 
-func performScan(path string, d fs.DirEntry, err error) error {
+func performScan(scanID int64, path string, d fs.DirEntry, err error, counters *ScanCounters) error {
     if db.DB == nil {
         fmt.Println("Database connection not initialized!")
         return nil
     }
 
-    if err != nil {
+    if err != nil || d.IsDir() {
         return err
     }
 
-    if d.IsDir() {
-        return nil
-    }
-
+    absPath := filepath.Join(baselinePath, path)
     info, err := d.Info()
     if err != nil {
         return err
     }
 
-    absPath := filepath.Join(baselinePath, path)
-
     f, err := os.Open(absPath)
     if err != nil {
-        fmt.Println("Failed to open: ", absPath)
+        fmt.Println("Failed to open:", absPath)
         return nil
     }
     defer f.Close()
 
-    size := info.Size()
-    modTime := info.ModTime().Format(time.RFC3339)
-
-    var count int 
-    err = db.DB.QueryRow(`SELECT COUNT(*) FROM files WHERE file_path = ?`, absPath).Scan(&count)
-    if err != nil {
-        return err
-    }
-
-    if count <= 0 {
-        fmt.Println("")
-    }
-
     hash := sha256.New()
-    if _, err := io.Copy(hash, f); err != nil {
-        return err
-    }
-
-
+    io.Copy(hash, f)
     hashString := hex.EncodeToString(hash.Sum(nil))
 
-    
+    size := info.Size()
+    modTime := info.ModTime().Format(time.RFC3339)
+    counters.Total++
 
-    row := db.DB.QueryRow(
-        `SELECT file_hash, file_size, modified FROM files WHERE file_path = ?`,
-        absPath,
-    )
-    
+    // Check if file exists in baseline
+    var fileID int
     var dbHash string
-    var dbSize string
-    var dbModTime string
+    err = db.DB.QueryRow(`SELECT file_id, file_hash FROM files WHERE file_path=?`, absPath).Scan(&fileID, &dbHash)
 
-    err = row.Scan(&dbHash, &dbSize, &dbModTime)
     if err == sql.ErrNoRows {
-        fmt.Printf("New file detected: %s | Adding to files", absPath)
-        _, err = db.DB.Exec(`INSERT INTO files (file_path, file_hash, file_size, modified) VALUES (?, ?, ?, ?)`, absPath, hashString, size, modTime,)
-        if err != nil {
-            fmt.Println("DB Insert Error: ", err)
-        }
-        _, err = db.DB.Exec(`INSERT INTO file_changes (file_path, change_type, hash) VALUES (?, ?, ?)`, absPath, "new", hashString,)
-        if err != nil {
-            fmt.Println("DB Insert Error: ", err)
-        }
+        // New file
+        fmt.Println("🆕 New file:", absPath)
+        res, _ := db.DB.Exec(`INSERT INTO files (file_path, file_hash, file_size, modified, last_seen_scan)
+                              VALUES (?, ?, ?, ?, ?)`, absPath, hashString, size, modTime, scanID)
+        fileID64, _ := res.LastInsertId()
+        db.DB.Exec(`INSERT INTO file_changes (file_id, scan_id, file_path, change_type, hash)
+                    VALUES (?, ?, ?, ?, ?)`, fileID64, scanID, absPath, "new", hashString)
+        counters.New++
         return nil
     }
+
     if err != nil {
-        fmt.Println("Database Read Error for", absPath, ":", err)
+        fmt.Println("DB Read Error:", err)
         return nil
     }
 
+    // Existing file: compare hash
     if dbHash != hashString {
-        fmt.Println("Modified file detected:", absPath)
-        db.DB.Exec(`INSERT INTO file_changes (file_path, change_type, hash) VALUES (?, ?, ?)`, absPath, "modified", hashString,)
+        fmt.Println("✏️ Modified:", absPath)
+        db.DB.Exec(`UPDATE files SET file_hash=?, file_size=?, modified=?, last_seen_scan=? WHERE file_id=?`,
+            hashString, size, modTime, scanID, fileID)
+        db.DB.Exec(`INSERT INTO file_changes (file_id, scan_id, file_path, change_type, hash)
+                    VALUES (?, ?, ?, ?, ?)`, fileID, scanID, absPath, "modified", hashString)
+        counters.Modified++
     } else {
-        fmt.Println("Unchanged:", absPath)
-        db.DB.Exec(`INSERT INTO file_changes (file_path, change_type, hash) VALUES (?, ?, ?)`, absPath, "unchanged", hashString,)
+        // Unchanged
+        db.DB.Exec(`UPDATE files SET last_seen_scan=? WHERE file_id=?`, scanID, fileID)
+        db.DB.Exec(`INSERT INTO file_changes (file_id, scan_id, file_path, change_type, hash)
+                    VALUES (?, ?, ?, ?, ?)`, fileID, scanID, absPath, "unchanged", hashString)
     }
 
-    
     return nil
+}
+
+
+func detectDeletedFiles(scanID int64, counters *ScanCounters) {
+    rows, err := db.DB.Query(`SELECT file_id, file_path FROM files WHERE last_seen_scan < ?`, scanID)
+    if err != nil {
+        fmt.Println("Deletion check failed:", err)
+        return
+    }
+    defer rows.Close()
+
+    for rows.Next() {
+        var fileID int
+        var filePath string
+        rows.Scan(&fileID, &filePath)
+
+        fmt.Println("🗑️ Deleted file:", filePath)
+        db.DB.Exec(`INSERT INTO file_changes (file_id, scan_id, file_path, change_type, hash)
+                    VALUES (?, ?, ?, ?, '')`, fileID, scanID, filePath, "deleted")
+        counters.Deleted++
+    }
 }

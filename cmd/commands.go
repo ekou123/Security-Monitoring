@@ -48,6 +48,12 @@ func init() {
 			Usage: "scan [path]",
 			Callback:    ScanHandler, // TODO: implement
 		},
+		"diff": {
+			Name: "diff",
+			Description: "Check differences in files",
+			Usage: "diff",
+			Callback: DiffHandler,
+		},
 	}
 }
 
