@@ -23,13 +23,14 @@ func InitializeDB() {
         log.Println("Warning: failed to enable foreign key enforcement:", err)
     }
 
-	if _, err = DB.Exec(`DROP TABLE IF EXISTS files;`); err != nil {
-		log.Println("Failed to drop table 'files':", err)
-	}
 	if _, err = DB.Exec(`DROP TABLE IF EXISTS file_changes;`); err != nil {
 		log.Println("Failed to drop table 'file_changes':", err)
 	}
 
+	if _, err = DB.Exec(`DROP TABLE IF EXISTS files;`); err != nil {
+		log.Println("Failed to drop table 'files':", err)
+	}
+	
 	if _, err = DB.Exec(`DROP TABLE IF EXISTS scans;`); err != nil {
 		log.Println("Failed to drop table 'file_changes':", err)
 	}
@@ -41,7 +42,7 @@ func InitializeDB() {
 		file_hash TEXT,
 		file_size INTEGER,
 		modified DATETIME,
-		last_seen_scan INTEGER REFERENCES scans(id)
+		last_seen_scan INTEGER REFERENCES scans(scan_id)
 	);`)
 	if (err != nil) {
 		log.Fatal(err)
@@ -50,7 +51,7 @@ func InitializeDB() {
 	_, err = DB.Exec(`CREATE TABLE IF NOT EXISTS file_changes (
 		change_id INTEGER PRIMARY KEY AUTOINCREMENT,
 		file_id INTEGER REFERENCES files(file_id),
-		scan_id INTEGER REFERENCES scans(id),
+		scan_id INTEGER REFERENCES scans(scan_id),
 		file_path TEXT,
 		change_type TEXT CHECK (change_type IN ('new', 'modified', 'deleted', 'unchanged')),
 		hash TEXT,
@@ -61,8 +62,8 @@ func InitializeDB() {
 	}
 
 	_, err = DB.Exec(`CREATE TABLE IF NOT EXISTS scans (
-		id INTEGER PRIMARY KEY AUTOINCREMENT,
-		time TEXT,
+		scan_id INTEGER PRIMARY KEY AUTOINCREMENT,
+		timestamp TEXT,
 		scanned_path TEXT,
 		total_files INTEGER,
 		new_files INTEGER,

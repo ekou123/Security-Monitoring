@@ -39,7 +39,7 @@ func ScanHandler(args []string) {
     }
 
     currentTime := time.Now().Format(time.RFC3339)
-    res, err := db.DB.Exec(`INSERT INTO scans (time, scanned_path, total_files, new_files, modified_files, deleted_files)
+    res, err := db.DB.Exec(`INSERT INTO scans (timestamp, scanned_path, total_files, new_files, modified_files, deleted_files)
                             VALUES (?, ?, 0, 0, 0, 0)`, currentTime, path)
     if err != nil {
         fmt.Println("Failed to start scan session:", err)
@@ -63,7 +63,7 @@ func ScanHandler(args []string) {
     detectDeletedFiles(scanID, counters)
 
     // Step 4: Update scan summary
-    _, err = db.DB.Exec(`UPDATE scans SET total_files=?, new_files=?, modified_files=?, deleted_files=? WHERE id=?`,
+    _, err = db.DB.Exec(`UPDATE scans SET total_files=?, new_files=?, modified_files=?, deleted_files=? WHERE scan_id=?`,
         counters.Total, counters.New, counters.Modified, counters.Deleted, scanID)
     if err != nil {
         fmt.Println("Failed to update scan summary:", err)
